@@ -1,0 +1,38 @@
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;min-height:100vh;display:flex;justify-content:center;color:#e5e9f5;
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  background:radial-gradient(120% 70% at 50% 0%,#18224a 0%,#0b1020 60%)}
+main{width:100%;max-width:420px;padding:max(20px,env(safe-area-inset-top)) 22px max(20px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:22px}
+header{display:flex;justify-content:space-between;align-items:center}
+h1{margin:0;font-size:1.25rem;font-weight:650;letter-spacing:.3px}
+.pill{font-size:.8rem;padding:6px 12px;border-radius:999px;background:#ffffff14;color:#9aa6c6}
+.pill.on{background:#34d3991f;color:#34d399}
+
+.ring-wrap{position:relative;width:min(78vw,300px);aspect-ratio:1;margin:6px auto 0}
+.ring{width:100%;height:100%;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:12;stroke-linecap:round}
+.track{stroke:#ffffff12}
+.progress{stroke:url(#g);stroke-dasharray:553;stroke-dashoffset:553;transition:stroke-dashoffset .35s ease}
+.center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#total{font-size:3.4rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.unit{margin-top:8px;font-size:.85rem;color:#8b97b8}
+
+.stats{display:flex;justify-content:space-between;text-align:center}
+.stats div{flex:1;display:flex;flex-direction:column;gap:2px}
+.stats b{font-size:1.25rem;font-variant-numeric:tabular-nums}
+.stats span{font-size:.75rem;color:#7d89aa}
+
+.card{background:#ffffff0d;border:1px solid #ffffff12;border-radius:18px;padding:6px 16px}
+label{display:flex;justify-content:space-between;align-items:center;padding:12px 0;font-size:.98rem}
+label+label{border-top:1px solid #ffffff10}
+.field{display:flex;align-items:center;gap:8px}
+.field em{font-style:normal;color:#8b97b8}
+input,select{font:inherit;font-size:1.05rem;color:#e5e9f5;background:#ffffff10;border:1px solid #ffffff18;border-radius:10px;padding:8px 10px;width:84px;text-align:right}
+select{text-align:left}
+input:focus,select:focus{outline:2px solid #34d39966}
+
+button{font:inherit;font-size:1.2rem;font-weight:700;padding:17px;border:0;border-radius:16px;color:#04210f;
+  background:linear-gradient(135deg,#34d399,#22d3ee);box-shadow:0 10px 30px #22d3ee33;transition:transform .1s}
+button:active{transform:scale(.98)}
+button.stop{background:#ef4444;color:#fff;box-shadow:0 10px 30px #ef444433}
+.note{margin:0;font-size:.8rem;text-align:center;color:#6b7799}
