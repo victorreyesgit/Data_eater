@@ -36,3 +36,8 @@ button{font:inherit;font-size:1.2rem;font-weight:700;padding:17px;border:0;borde
 button:active{transform:scale(.98)}
 button.stop{background:#ef4444;color:#fff;box-shadow:0 10px 30px #ef444433}
 .note{margin:0;font-size:.8rem;text-align:center;color:#6b7799}
+
+select{width:auto;max-width:210px;text-align:left}
+input[type=checkbox]{width:24px;height:24px;accent-color:#34d399}
+[hidden]{display:none!important}
+#black{position:fixed;inset:0;background:#000;z-index:10;display:flex;align-items:flex-end;justify-content:center;padding:28px;color:#3a3a3a;font-size:.8rem}

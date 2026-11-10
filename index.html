@@ -44,14 +44,23 @@
     <label>Target
       <span class="field"><input id="target" type="number" value="1" min="0.1" max="50" step="0.5" inputmode="decimal"><em>GB</em></span>
     </label>
-    <label>Parallel streams
-      <select id="streams"><option>1</option><option selected>2</option><option>4</option></select>
+    <label>Mode
+      <select id="mode">
+        <option value="cool">Cool (20 Mbit/s)</option>
+        <option value="normal">Normal (50 Mbit/s)</option>
+        <option value="max">Max (no limit)</option>
+        <option value="bg">Background (screen off)</option>
+      </select>
+    </label>
+    <label>Black screen after start
+      <input id="auto" type="checkbox" checked>
     </label>
   </section>
 
   <button id="go">Start</button>
-  <p class="note">On Android (Chrome) it keeps going with the screen off and notifies you when done. Turn Wi-Fi off to use mobile data.</p>
+  <p class="note">Cool/Normal/Max need the screen on (use the black screen, tap to return). Background works with the screen off, Android Chrome only, up to 5 GB.</p>
 </main>
+<div id="black" hidden><span id="bt"></span></div>
 <script src="script.js"></script>
 </body>
 </html>

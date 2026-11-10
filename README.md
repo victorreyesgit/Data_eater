@@ -11,6 +11,11 @@ Downloads random data to use up mobile data on purpose. Free, no account, no API
 Replace the files in the repo. If the phone shows the old version, close the app fully and reopen it.
 
 ## Notes
-- Background download + notification on finish needs Chrome on Android (install the app from Chrome).
-- iPhone / Firefox: it falls back to screen-on mode (the screen must stay on).
-- In background mode you can also cancel from the download notification Chrome shows.
+- Cool (20 Mbit/s, 2 min on / 1 min rest), Normal (50 Mbit/s, 3 on / 1 rest), Max (no limit, 2 on / 2 rest): screen stays on.
+  Parallel streams are automatic (1 to 4). Black screen = screen on but fully black (tap to return).
+- Background: Android Chrome only. Works with the screen off or the app closed. Chrome controls the speed
+  (no limit, no breaks) and shows its own download notification with a cancel button.
+  Chrome keeps the data on disk until the download ends, so you need that much free space. Capped at 5 GB
+  (change MAX_BG_GB in script.js).
+- Screen-on modes stop if you press the power button (browsers freeze web pages).
+- A notification is sent when it finishes (allow notifications the first time).

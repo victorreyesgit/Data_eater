@@ -1,37 +1,115 @@
 // Downloads random data from Cloudflare's free speed-test endpoint (no key, no account).
-// Data is only counted and thrown away: nothing is stored on the phone.
-//  - Android Chrome: uses Background Fetch, so it keeps going with the screen off
-//    and the service worker shows a notification when it finishes.
-//  - Other browsers (iPhone, Firefox): foreground mode, screen must stay on.
-const BASE = "https://speed.cloudflare.com/__down?bytes=";
-const CHUNK_FG = 25e6, CHUNK_BG = 100e6;
-const MAX_GB = 50;           // hard safety cap
-const GB = 1e9;              // carriers count decimal GB
-const CIRC = 553;            // ring circumference (2 * pi * 88)
-const BG_ID = "data-eater";
+// Data is only counted and thrown away.
+// Two ways to run:
+//  1) Cool / Normal / Max: screen stays on (can be fully black). Speed limit, rest breaks, auto streams.
+//  2) Background: Android Chrome only. Keeps going with the screen off or the app closed.
+//     Chrome controls the speed (no limit, no breaks) and shows its own download notification.
+const URL_BASE = "https://speed.cloudflare.com/__down?bytes=25000000";
+const PROFILES = {                       // mbit = speed limit (0 = none), on/rest in seconds
+  cool:   { mbit: 20, on: 120, rest: 60 },
+  normal: { mbit: 50, on: 180, rest: 60 },
+  max:    { mbit: 0,  on: 120, rest: 120 }
+};
+const MAX_GB = 50, MAX_BG_GB = 5;        // background mode keeps the data on disk until the end, so it is capped
+const GB = 1e9, CIRC = 553, MAX_STREAMS = 4, BLACK_AFTER_MS = 8000;
+const BG_ID = "data-eater", CHUNK_BG = 100e6;
 const $ = id => document.getElementById(id);
-let running = false, mode = "fg", total = 0, target = 0, startTime = 0;
-let wakeLock = null, controllers = [], bgReg = null;
 
-function clock(s) { s = Math.round(s); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
-function setStatus(text, on) { $("status").textContent = text; $("status").className = "pill" + (on ? " on" : ""); }
+let running = false, bgMode = false, bgReg = null, phase = "on", total = 0, target = 0, profile = PROFILES.cool;
+let startTime = 0, activeMs = 0, phaseMs = 0, winMs = 0, lastBytes = 0, lastRate = 0, lastTick = 0;
+let streams = 0, noMore = false, controllers = [], wakeLock = null, ticker = null, blackTimer = null;
 
-function update() {
-  const secs = (Date.now() - startTime) / 1000 || 1;
-  const rate = total / secs;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function clock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function setStatus(t, on) { $("status").textContent = t; $("status").className = "pill" + (on ? " on" : ""); }
+function setRunningUI(on) { $("go").textContent = on ? "Stop" : "Start"; $("go").className = on ? "stop" : ""; }
+
+/* ---------- screen-on mode: download workers ---------- */
+async function worker() {
+  while (running) {
+    if (phase !== "on") { await sleep(300); continue; }
+    const c = new AbortController();
+    controllers.push(c);
+    try {
+      const r = await fetch(URL_BASE + "&r=" + Math.random(), { cache: "no-store", signal: c.signal });
+      const reader = r.body.getReader();
+      while (running && phase === "on") {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.length;                       // chunk is discarded right away
+        if (total >= target) { finish("Target reached"); return; }
+        if (profile.mbit) {                          // speed limit: wait if we are ahead of schedule
+          const bps = profile.mbit * 125000;
+          const ahead = total - bps * (activeMs / 1000 + 0.5);
+          if (ahead > 0) await sleep(ahead / bps * 1000);
+        }
+      }
+      reader.cancel().catch(() => {});
+    } catch (e) {
+      if (!running) return;
+      if (phase === "on") { setStatus("Retrying...", true); await sleep(1500); }
+    }
+  }
+}
+
+function addWorker() { streams++; worker(); }
+
+// Automatic streams: add one only if the speed keeps improving and the limit is not reached yet.
+function checkStreams() {
+  const rate = (total - lastBytes) / (winMs / 1000);
+  lastBytes = total; winMs = 0;
+  if (!noMore) {
+    if (streams > 1 && rate < lastRate * 1.15) noMore = true;
+    else if (streams < MAX_STREAMS && (!profile.mbit || rate < profile.mbit * 125000 * 0.85)) addWorker();
+  }
+  lastRate = rate;
+}
+
+/* ---------- ticker: clock, rest cycles, UI ---------- */
+function tick() {
+  if (bgMode) { draw(); return; }
+  const now = Date.now(), dt = now - lastTick; lastTick = now;
+  phaseMs += dt;
+  if (phase === "on") {
+    activeMs += dt; winMs += dt;
+    if (winMs >= 4000) checkStreams();
+    if (phaseMs >= profile.on * 1000) {
+      phase = "rest"; phaseMs = 0;
+      controllers.forEach(c => c.abort()); controllers = [];
+    }
+  } else if (phaseMs >= profile.rest * 1000) {
+    phase = "on"; phaseMs = 0; winMs = 0; lastBytes = total;
+  }
+  draw();
+}
+
+function draw() {
+  const secs = (Date.now() - startTime) / 1000;
+  const rate = bgMode ? total / (secs || 1) : (activeMs > 0 ? total / (activeMs / 1000) : 0);   // bytes/s
+  let eta = "-";
+  if (running && rate > 0) {
+    const act = (target - total) / rate;
+    eta = clock(bgMode ? act : act + Math.floor(act / profile.on) * profile.rest);
+  }
   $("total").textContent = (total / GB).toFixed(2);
   $("ring").style.strokeDashoffset = CIRC * (1 - Math.min(1, total / (target || 1)));
-  $("speed").textContent = (rate * 8 / 1e6).toFixed(1);
+  $("speed").textContent = phase === "on" ? (rate * 8 / 1e6).toFixed(1) : "0.0";
   $("time").textContent = clock(secs);
-  $("left").textContent = running && rate > 0 ? clock((target - total) / rate) : "-";
+  $("left").textContent = eta;
+  if (running) {
+    if (bgMode) setStatus("Downloading (background ok)", true);
+    else setStatus(phase === "on" ? "Downloading" : "Resting " + clock(profile.rest - phaseMs / 1000), phase === "on");
+  }
+  $("bt").textContent = (total / GB).toFixed(2) + " / " + (target / GB).toFixed(2) + " GB" + (phase === "rest" ? " - rest" : "");
 }
 
-function setRunningUI(on) {
-  $("go").textContent = on ? "Stop" : "Start";
-  $("go").className = on ? "stop" : "";
-}
+/* ---------- black screen ---------- */
+function showBlack() { if (running && !bgMode) $("black").hidden = false; }
+function hideBlack() { $("black").hidden = true; }
+$("black").onclick = hideBlack;
 
-async function notifyDone(text) {
+/* ---------- notifications ---------- */
+async function notify(text) {
   try {
     if (Notification.permission !== "granted") return;
     const reg = await navigator.serviceWorker.ready;
@@ -39,122 +117,52 @@ async function notifyDone(text) {
   } catch (e) {}
 }
 
-/* ---------- foreground mode ---------- */
-async function worker() {
-  while (running) {
-    const c = new AbortController();
-    controllers.push(c);
-    try {
-      const r = await fetch(BASE + CHUNK_FG + "&r=" + Math.random(), { cache: "no-store", signal: c.signal });
-      const reader = r.body.getReader();
-      while (running) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.length;     // chunk is discarded right after counting
-        update();
-        if (total >= target) { stopFg("Target reached"); return; }
-      }
-    } catch (e) {
-      if (!running) return;
-      setStatus("Retrying...", true);
-      await new Promise(r => setTimeout(r, 1500));
-      if (running) setStatus("Downloading", true);
-    }
-  }
-}
-
-async function startFg() {
-  mode = "fg"; running = true;
-  setRunningUI(true); setStatus("Downloading", true);
-  try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
-  for (let i = 0; i < parseInt($("streams").value); i++) worker();
-}
-
-function stopFg(msg) {
-  running = false;
-  controllers.forEach(c => c.abort()); controllers = [];
-  if (wakeLock) { wakeLock.release(); wakeLock = null; }
-  setRunningUI(false); update();
-  setStatus(msg || "Stopped", false);
-  if (msg === "Target reached") notifyDone("Done: " + (total / GB).toFixed(2) + " GB downloaded");
-}
-
 /* ---------- background mode (Android Chrome) ---------- */
 function attachBg(r) {
-  bgReg = r; mode = "bg"; running = true;
+  bgMode = true; bgReg = r; running = true; phase = "on";
   target = r.downloadTotal || target;
-  setRunningUI(true); setStatus("Downloading (background ok)", true);
+  setRunningUI(true);
+  clearInterval(ticker); ticker = setInterval(tick, 1000);
   r.addEventListener("progress", () => {
-    total = r.downloaded; update();
-    if (r.result) endBg(r.result === "success" ? "Target reached" : "Stopped");
+    total = r.downloaded;
+    if (r.result) endBg(r.result === "success" ? "Target reached" : "Stopped"); else draw();
   });
+  draw();
 }
 
 function endBg(msg) {
-  running = false; bgReg = null;
-  setRunningUI(false); update();
-  setStatus(msg, false);
+  bgMode = false; bgReg = null; running = false; phase = "on";
+  clearInterval(ticker); setRunningUI(false); draw(); setStatus(msg, false);
 }
 
-async function startBg(reg) {
-  const n = Math.ceil(target / CHUNK_BG);
-  target = n * CHUNK_BG;                       // rounded up to 0.1 GB steps
-  const urls = [];
-  for (let i = 0; i < n; i++) urls.push(BASE + CHUNK_BG + "&r=" + Math.random() + "-" + i);
-  const r = await reg.backgroundFetch.fetch(BG_ID, urls, {
-    title: "Data Eater",
-    icons: [{ src: "icon-192.png", sizes: "192x192", type: "image/png" }],
-    downloadTotal: target
-  });
-  attachBg(r);
-}
-
-/* ---------- start / stop ---------- */
-async function start() {
-  let g = parseFloat($("target").value);
-  if (!(g > 0)) { setStatus("Enter a target", false); return; }
-  g = Math.min(g, MAX_GB);
-  $("target").value = g;
-
-  const net = navigator.connection && navigator.connection.type;
-  let msg = "Download " + g + " GB now?";
-  if (net === "wifi") msg += "\n\nYou seem to be on Wi-Fi, not mobile data.";
-  if (!confirm(msg)) return;
-
-  try { if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission(); } catch (e) {}
-
-  target = g * GB; total = 0; startTime = Date.now();
-  try { localStorage.setItem("de-start", startTime); } catch (e) {}
-
+async function startBg(g) {
   let reg = null;
   try { reg = await navigator.serviceWorker.ready; } catch (e) {}
-  if (reg && reg.backgroundFetch) {
-    try { await startBg(reg); return; }
-    catch (e) { setStatus("Background failed, using screen-on mode", false); }
-  }
-  startFg();
+  if (!reg || !reg.backgroundFetch) { setStatus("Needs Chrome on Android", false); return; }
+  const n = Math.ceil(g * GB / CHUNK_BG);
+  target = n * CHUNK_BG; total = 0; startTime = Date.now();
+  try { localStorage.setItem("de-start", startTime); } catch (e) {}
+  const urls = [];
+  for (let i = 0; i < n; i++) urls.push("https://speed.cloudflare.com/__down?bytes=" + CHUNK_BG + "&r=" + Math.random() + "-" + i);
+  try {
+    const r = await reg.backgroundFetch.fetch(BG_ID, urls, {
+      title: "Data Eater",
+      icons: [{ src: "icon-192.png", sizes: "192x192", type: "image/png" }],
+      downloadTotal: target
+    });
+    attachBg(r);
+  } catch (e) { setStatus("Could not start (" + (e.name || "error") + ")", false); }
 }
 
-function stop() {
-  if (mode === "bg" && bgReg) { bgReg.abort(); endBg("Stopped"); }
-  else stopFg();
-}
-
-$("go").onclick = () => running ? stop() : start();
-
-// Foreground mode: leaving the app stops everything. Background mode keeps going on purpose.
-document.addEventListener("visibilitychange", async () => {
-  if (!running) return;
-  if (mode === "fg" && document.visibilityState === "hidden") stopFg("Stopped (app left screen)");
-  if (mode === "bg" && document.visibilityState === "visible") {
+async function resyncBg() {
+  try {
     const reg = await navigator.serviceWorker.ready;
     const r = await reg.backgroundFetch.get(BG_ID);
     if (!r) endBg("Finished while away");
     else if (r.result) endBg(r.result === "success" ? "Target reached" : "Stopped");
-    else { total = r.downloaded; update(); }
-  }
-});
-window.addEventListener("pagehide", () => { if (running && mode === "fg") stopFg(); });
+    else { total = r.downloaded; draw(); }
+  } catch (e) {}
+}
 
 // If the app is reopened while a background download is still running, reconnect to it.
 async function resume() {
@@ -164,11 +172,62 @@ async function resume() {
     const r = await reg.backgroundFetch.get(BG_ID);
     if (r && !r.result) {
       startTime = parseInt(localStorage.getItem("de-start")) || Date.now();
-      total = r.downloaded; attachBg(r); update();
+      total = r.downloaded; attachBg(r);
     }
   } catch (e) {}
 }
 
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("service-worker.js").then(resume);
+/* ---------- start / stop ---------- */
+async function start() {
+  const m = $("mode").value, isBg = m === "bg";
+  let g = parseFloat($("target").value);
+  if (!(g > 0)) { setStatus("Enter a target", false); return; }
+  const cap = isBg ? MAX_BG_GB : MAX_GB;
+  g = Math.min(g, cap); $("target").value = g;
+
+  let msg = "Download " + g + " GB now?";
+  if (isBg) msg += "\n\nIt keeps going with the screen off. Needs " + g + " GB of free space until it finishes (then it is deleted).";
+  const net = navigator.connection && navigator.connection.type;
+  if (net === "wifi") msg += "\n\nYou seem to be on Wi-Fi, not mobile data.";
+  if (!confirm(msg)) return;
+
+  try { if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission(); } catch (e) {}
+
+  if (isBg) { await startBg(g); return; }
+
+  profile = PROFILES[m];
+  total = 0; target = g * GB; startTime = lastTick = Date.now();
+  activeMs = phaseMs = winMs = lastBytes = lastRate = 0; streams = 0; noMore = false; phase = "on";
+  running = true; setRunningUI(true);
+  try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+  addWorker();
+  ticker = setInterval(tick, 500);
+  if ($("auto").checked) blackTimer = setTimeout(showBlack, BLACK_AFTER_MS);
 }
+
+function halt() {
+  running = false; clearInterval(ticker); clearTimeout(blackTimer);
+  controllers.forEach(c => c.abort()); controllers = [];
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+  hideBlack(); setRunningUI(false);
+}
+
+function finish(msg) {
+  halt(); phase = "on"; draw(); setStatus(msg, false);
+  notify(msg === "Target reached" ? "Done: " + (total / GB).toFixed(2) + " GB downloaded" : msg + " at " + (total / GB).toFixed(2) + " GB");
+}
+
+function stopBg() { if (bgReg) bgReg.abort(); endBg("Stopped"); }
+
+$("go").onclick = () => running ? (bgMode ? stopBg() : finish("Stopped")) : start();
+
+// Screen-on modes: if the page is hidden the browser freezes it, so stop cleanly.
+// Background mode keeps going on purpose and just re-syncs when you come back.
+document.addEventListener("visibilitychange", () => {
+  if (!running) return;
+  if (!bgMode && document.visibilityState === "hidden") finish("Stopped (screen turned off)");
+  if (bgMode && document.visibilityState === "visible") resyncBg();
+});
+window.addEventListener("pagehide", () => { if (running && !bgMode) halt(); });
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("service-worker.js").then(resume);
